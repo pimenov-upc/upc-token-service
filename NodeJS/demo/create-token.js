@@ -14,9 +14,13 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { UpcTokenService } from '../dist/index.js';
+
+const demoDirectory = dirname(fileURLToPath(import.meta.url));
+process.loadEnvFile(resolve(demoDirectory, '.env'));
 
 /**
  * Reads a required environment variable and reports a safe, actionable error if absent.
@@ -43,7 +47,10 @@ async function main() {
     throw new Error('UPC_ENVIRONMENT must be either "test" or "production".');
   }
 
-  const privateKeyPath = resolve(requiredEnv('UPC_PRIVATE_KEY_PATH'));
+  const configuredKeyPath = requiredEnv('UPC_PRIVATE_KEY_PATH');
+  const privateKeyPath = isAbsolute(configuredKeyPath)
+    ? configuredKeyPath
+    : resolve(demoDirectory, configuredKeyPath);
   const privateKey = readFileSync(privateKeyPath, 'utf8');
   const cvNum = process.env.UPC_CARD_CVV?.trim();
   const client = new UpcTokenService(environment, {
