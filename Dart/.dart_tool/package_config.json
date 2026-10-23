@@ -1,0 +1,14 @@
+{
+  "configVersion": 2,
+  "packages": [
+    {
+      "name": "upc_token_service",
+      "rootUri": "../",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    }
+  ],
+  "generator": "pub",
+  "generatorVersion": "3.13.2",
+  "pubCache": "file:///C:/Users/pimenov_s/AppData/Local/Pub/Cache"
+}

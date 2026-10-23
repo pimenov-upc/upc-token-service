@@ -1,0 +1,14 @@
+{
+  "roots": [
+    "upc_token_service"
+  ],
+  "packages": [
+    {
+      "name": "upc_token_service",
+      "version": "0.1.0",
+      "dependencies": [],
+      "devDependencies": []
+    }
+  ],
+  "configVersion": 1
+}
