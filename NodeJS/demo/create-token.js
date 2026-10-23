@@ -5,7 +5,7 @@
  */
 
 import { dirname, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { UpcTokenService } from '../dist/index.js';
 
@@ -24,17 +24,26 @@ function requiredEnv(name) {
 /** Redacts sensitive values in raw XML before printing the response. */
 function redactSensitiveXml(xml) {
   const sensitiveTags = ['tokenId', 'CardNum', 'CVNum', 'TokenNumber', 'TAVV'];
-  return sensitiveTags.reduce((result, tag) => {
+  const redactedXml = sensitiveTags.reduce((result, tag) => {
     return result.replace(
       new RegExp(`(<${tag}\\b[^>]*>)[\\s\\S]*?(</${tag}>)`, 'gi'),
       '$1[REDACTED]$2'
     );
   }, xml);
+  return redactedXml.replace(
+    /<encodedData\b[^>]*>[\s\S]*?<\/encodedData>/gi,
+    '<encodedData>[OMITTED]</encodedData>'
+  );
 }
 
 /** Creates a UPC token using card details loaded from demo/.env. */
 async function main() {
   const customBaseUrl = process.env.UPC_BASE_URL?.trim();
+  const loggingSetting = (process.env.UPC_LOGGING ?? 'false').trim().toLowerCase();
+  if (loggingSetting !== 'true' && loggingSetting !== 'false') {
+    throw new Error('UPC_LOGGING must be either "true" or "false".');
+  }
+  const loggingEnabled = loggingSetting === 'true';
   const environment = (process.env.UPC_ENVIRONMENT ?? 'test').toLowerCase();
   if (!customBaseUrl && environment !== 'test' && environment !== 'production') {
     throw new Error('UPC_ENVIRONMENT must be either "test" or "production".');
@@ -44,9 +53,12 @@ async function main() {
   const client = new UpcTokenService(customBaseUrl || environment, {
     merchantId: requiredEnv('UPC_MERCHANT_ID'),
     terminalId: requiredEnv('UPC_TERMINAL_ID'),
+    logging: loggingEnabled,
   });
-  const trackingId = randomUUID();
-  console.info(`UPC create-token trackingId: ${trackingId}`);
+  const trackingId = String(randomInt(100000, 1000000));
+  if (loggingEnabled) {
+    console.info(`UPC create-token trackingId: ${trackingId}`);
+  }
 
   const response = await client.createToken({
     trackingId,
@@ -58,7 +70,9 @@ async function main() {
     },
   });
 
-  console.info('Create-token XML response:', redactSensitiveXml(response));
+  if (loggingEnabled) {
+    console.info('Create-token XML response:', redactSensitiveXml(response));
+  }
 }
 
 main().catch((error) => {

@@ -37,8 +37,11 @@ async function expectXmlPost(
   const { url, init, body } = getRequest();
   expect(url).toBe(`${resource}${endpoint}`);
   expect(init.method).toBe('POST');
-  expect(new Headers(init.headers).get('Content-Type')).toBe('application/xml; charset=utf-8');
+  expect(new Headers(init.headers).get('Content-Type')).toBe('application/xml');
   expect(body).toMatch(/^<\?xml version="1\.0" encoding="UTF-8"\?><ECommerceConnect /);
+  expect(body).toContain('xmlns:noNamespaceSchemaLocation="https://secure.upc.ua/go/pub/schema/xmlpay-1.18.xsd"');
+  expect(body).toContain('xsi:noNamespaceSchemaLocation="https://secure.upc.ua/go/pub/schema/xmlpay-1.18.xsd"');
+  expect(body).not.toContain('xmlpay-2.26.xsd');
   expect(body).toContain(expectedOperationXml);
   expect(body).toContain('<Message id="');
   expect(body).not.toContain('"header"');
@@ -179,7 +182,7 @@ describe('UpcTokenService XML API', () => {
     const service = createService('production');
 
     await expectXmlPost(
-      () => service.getTokenStatus({ trackingId: 'status-prod', tokenId: 'token-1' }),
+      () => service.getTokenStatus({ trackingId: 'prod-1', tokenId: 'token-1' }),
       '/go/token/status',
       '<XMLTokenStatusRequest>',
       UpcTokenServiceResource.Production
@@ -190,7 +193,7 @@ describe('UpcTokenService XML API', () => {
     const service = createService('https://certsrv1.ad.upc.intranet:8443');
 
     await expectXmlPost(
-      () => service.getTokenStatus({ trackingId: 'status-custom', tokenId: 'token-1' }),
+      () => service.getTokenStatus({ trackingId: 'custom1', tokenId: 'token-1' }),
       '/go/token/status',
       '<XMLTokenStatusRequest>',
       'https://certsrv1.ad.upc.intranet:8443'
@@ -211,12 +214,12 @@ describe('UpcTokenService XML API', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects a tracking ID longer than 100 characters', async () => {
+  it('rejects a tracking ID longer than 10 characters', async () => {
     const service = createService();
 
     await expect(
-      service.getTokenStatus({ trackingId: 'x'.repeat(101), tokenId: 'token-1' })
-    ).rejects.toThrow('trackingId must not exceed 100 characters.');
+      service.getTokenStatus({ trackingId: 'x'.repeat(11), tokenId: 'token-1' })
+    ).rejects.toThrow('trackingId must not exceed 10 characters.');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -258,13 +261,13 @@ describe('UpcTokenService XML API', () => {
     const service = createService();
 
     await service.getCardContent({
-      trackingId: 'tracking&<id>',
+      trackingId: 't&<id>',
       contentId: 'content"id',
       brand: "VISA'&",
     });
 
     const { body } = getRequest();
-    expect(body).toContain('<trackingId>tracking&amp;&lt;id&gt;</trackingId>');
+    expect(body).toContain('<trackingId>t&amp;&lt;id&gt;</trackingId>');
     expect(body).toContain('<contentId>content&quot;id</contentId>');
     expect(body).toContain('<Brand>VISA&apos;&amp;</Brand>');
   });
@@ -283,15 +286,16 @@ describe('UpcTokenService XML API', () => {
       '<TokenNumber>number-secret</TokenNumber><encodedData>binary-secret</encodedData></ECommerceConnect>';
     fetchMock.mockResolvedValue(new Response(sensitiveResponse, { status: 200 }));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const service = createService();
+    const service = createService('test', { logging: true });
 
     await service.createToken({
-      trackingId: 'create-logged',
+      trackingId: 'log-1',
       card: { cardNum: '4111111111111111', expMonth: '12', expYear: '2030', cvNum: '123' },
     });
 
     const logs = infoSpy.mock.calls.flat().join(' ');
     expect(logs).toContain('POST https://ecg.test.upc.ua/go/token/create');
+    expect(logs).toContain('Request Content-Type: application/xml');
     expect(logs).toContain('Request XML for XMLCreateTokenRequest');
     expect(logs).toContain('<XMLCreateTokenRequest>');
     expect(logs).toContain('HTTP 200 response for XMLCreateTokenRequest');
@@ -309,10 +313,10 @@ describe('UpcTokenService XML API', () => {
   it('marks an empty XML response in logs', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const service = createService();
+    const service = createService('test', { logging: true });
 
     await service.createToken({
-      trackingId: 'create-empty-response',
+      trackingId: 'empty-1',
       card: { cardNum: '4111111111111111', expMonth: '12', expYear: '2030' },
     });
 
@@ -321,6 +325,23 @@ describe('UpcTokenService XML API', () => {
     expect(logs).toContain('[empty response body]');
     expect(logs).not.toContain('4111111111111111');
     infoSpy.mockRestore();
+  });
+
+  it('does not log request or response when logging is disabled', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const service = createService();
+
+    await service.getTokenStatus({ trackingId: 'status-1', tokenId: 'token-1' });
+    fetchMock.mockResolvedValue(new Response('Gateway unavailable', { status: 502 }));
+    await expect(
+      service.getTokenStatus({ trackingId: 'status-2', tokenId: 'token-2' })
+    ).rejects.toMatchObject({ status: 502 });
+
+    expect(infoSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    infoSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it('surfaces non-success HTTP responses', async () => {

@@ -14,6 +14,8 @@ export interface UpcTokenServiceOptions {
 	merchantId: string;
 	terminalId: string;
 	timeout?: number;
+	/** Enables redacted request/response diagnostics. Defaults to false. */
+	logging?: boolean;
 }
 
 export interface TokenRequest {
@@ -133,6 +135,7 @@ const API_PATHS = {
  * const client = new UpcTokenService('test', {
  *   merchantId: '7651243',
  *   terminalId: 'E7651243',
+ *   logging: true,
  * });
  * // Provide the custom server base URL; API paths are appended by the SDK.
  * const customClient = new UpcTokenService(
@@ -143,6 +146,7 @@ const API_PATHS = {
 export class UpcTokenService {
 	private readonly http: Http;
 	private readonly timeout: number | undefined;
+	private readonly loggingEnabled: boolean;
 
 	/**
 	 * Creates an SDK client for the UPC test, production, or custom HTTPS resource.
@@ -158,6 +162,7 @@ export class UpcTokenService {
 		this.validateMaxLength(options.terminalId, 35, 'terminalId');
 
 		this.timeout = options.timeout;
+		this.loggingEnabled = options.logging ?? false;
 		this.http = new Http(baseUrl, options.timeout);
 	}
 
@@ -289,13 +294,16 @@ export class UpcTokenService {
 	): Promise<UpcTokenServiceResponse> {
 		const xml = this.createXmlRequest(operation, payload);
 		const url = `${this.http.base}${endpoint}`;
-		console.info(`[UPC Token Service] POST ${url} (${operation})`);
-		console.info(`[UPC Token Service] Request XML for ${operation}:`, redactXmlForLog(xml));
+		if (this.loggingEnabled) {
+			console.info(`[UPC Token Service] POST ${url} (${operation})`);
+			console.info('[UPC Token Service] Request Content-Type: application/xml');
+			console.info(`[UPC Token Service] Request XML for ${operation}:`, redactXmlForLog(xml));
+		}
 
 		try {
 			const response = await this.http.post(endpoint, xml, {
 				options: {
-					headers: { 'Content-Type': 'application/xml; charset=utf-8' },
+					headers: { 'Content-Type': 'application/xml' },
 				},
 				returnType: 'text',
 				...(this.timeout !== undefined ? { timeout: this.timeout } : {}),
@@ -310,20 +318,24 @@ export class UpcTokenService {
 				httpResponse?.headers.get('x-correlation-id') ??
 				httpResponse?.headers.get('correlation-id') ??
 				'not provided';
-			console.info(
-				`[UPC Token Service] HTTP ${status} response for ${operation} ` +
-					`(Content-Type: ${contentType}; Content-Length: ${contentLength}; ` +
-					`Request-ID: ${requestId}; Empty: ${responseXml.length === 0}):`,
-				responseXml.length > 0 ? redactXmlForLog(responseXml) : '[empty response body]'
-			);
+			if (this.loggingEnabled) {
+				console.info(
+					`[UPC Token Service] HTTP ${status} response for ${operation} ` +
+						`(Content-Type: ${contentType}; Content-Length: ${contentLength}; ` +
+						`Request-ID: ${requestId}; Empty: ${responseXml.length === 0}):`,
+					responseXml.length > 0 ? redactXmlForLog(responseXml) : '[empty response body]'
+				);
+			}
 			return responseXml;
 		} catch (error) {
 			const status =
 				error instanceof FetchError ? error.status : this.http.response?.status ?? 'unavailable';
 			const message = error instanceof Error ? error.message : 'Unknown error';
-			console.error(
-				`[UPC Token Service] ${operation} failed (HTTP ${status}): ${message}`
-			);
+			if (this.loggingEnabled) {
+				console.error(
+					`[UPC Token Service] ${operation} failed (HTTP ${status}): ${message}`
+				);
+			}
 			throw error;
 		}
 	}
@@ -372,7 +384,7 @@ export class UpcTokenService {
 
 	private validateTrackingId(trackingId: string): void {
 		this.validateNonEmpty(trackingId, 'trackingId');
-		this.validateMaxLength(trackingId, 100, 'trackingId');
+		this.validateMaxLength(trackingId, 10, 'trackingId');
 	}
 
 	private validateNonEmpty(value: string | undefined, name: string): void {
