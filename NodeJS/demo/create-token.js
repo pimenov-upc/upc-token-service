@@ -1,20 +1,10 @@
 /**
  * Команда npm run demo:create-token збирає SDK і запускає приклад.
- * Перед запуском задайте змінні середовища 
- *  UPC_ENVIRONMENT (test або production), 
- *  UPC_MERCHANT_ID, 
- *  UPC_TERMINAL_ID, 
- *  UPC_PRIVATE_KEY_PATH, 
- *  UPC_CARD_NUMBER, 
- *  UPC_CARD_EXP_MONTH,
- *  UPC_CARD_EXP_YEAR,
- *  UPC_CARD_CVV (необов’язковий). 
- * 
- * Сценарій не виводить приватний ключ і приховує чутливі поля відповіді.
+ * Змінні для демо задаються у файлі demo/.env.
+ * Використовуйте лише тестові карткові дані в тестовому середовищі.
  */
 
-import { readFileSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { UpcTokenService } from '../dist/index.js';
@@ -22,10 +12,7 @@ import { UpcTokenService } from '../dist/index.js';
 const demoDirectory = dirname(fileURLToPath(import.meta.url));
 process.loadEnvFile(resolve(demoDirectory, '.env'));
 
-/**
- * Reads a required environment variable and reports a safe, actionable error if absent.
- * @example requiredEnv('UPC_MERCHANT_ID')
- */
+/** Reads a required environment variable and reports a safe error if absent. */
 function requiredEnv(name) {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -34,33 +21,34 @@ function requiredEnv(name) {
   return value;
 }
 
-/** Redacts sensitive card and payment-token fields before printing a response. */
-function redactSensitiveFields(key, value) {
-  const sensitiveFields = new Set(['cardnum', 'cvnum', 'tokennumber', 'tavv']);
-  return sensitiveFields.has(key.toLowerCase()) ? '[REDACTED]' : value;
+/** Redacts sensitive values in raw XML before printing the response. */
+function redactSensitiveXml(xml) {
+  const sensitiveTags = ['tokenId', 'CardNum', 'CVNum', 'TokenNumber', 'TAVV'];
+  return sensitiveTags.reduce((result, tag) => {
+    return result.replace(
+      new RegExp(`(<${tag}\\b[^>]*>)[\\s\\S]*?(</${tag}>)`, 'gi'),
+      '$1[REDACTED]$2'
+    );
+  }, xml);
 }
 
-/** Creates a UPC token using credentials and card details from the environment. */
+/** Creates a UPC token using card details loaded from demo/.env. */
 async function main() {
   const environment = (process.env.UPC_ENVIRONMENT ?? 'test').toLowerCase();
   if (environment !== 'test' && environment !== 'production') {
     throw new Error('UPC_ENVIRONMENT must be either "test" or "production".');
   }
 
-  const configuredKeyPath = requiredEnv('UPC_PRIVATE_KEY_PATH');
-  const privateKeyPath = isAbsolute(configuredKeyPath)
-    ? configuredKeyPath
-    : resolve(demoDirectory, configuredKeyPath);
-  const privateKey = readFileSync(privateKeyPath, 'utf8');
   const cvNum = process.env.UPC_CARD_CVV?.trim();
   const client = new UpcTokenService(environment, {
     merchantId: requiredEnv('UPC_MERCHANT_ID'),
     terminalId: requiredEnv('UPC_TERMINAL_ID'),
-    privateKey,
   });
+  const trackingId = randomUUID();
+  console.info(`UPC create-token trackingId: ${trackingId}`);
 
   const response = await client.createToken({
-    trackingId: randomUUID(),
+    trackingId,
     card: {
       cardNum: requiredEnv('UPC_CARD_NUMBER'),
       expMonth: requiredEnv('UPC_CARD_EXP_MONTH'),
@@ -69,10 +57,7 @@ async function main() {
     },
   });
 
-  console.info(
-    'Create-token response:',
-    JSON.stringify(response, redactSensitiveFields, 2)
-  );
+  console.info('Create-token XML response:', redactSensitiveXml(response));
 }
 
 main().catch((error) => {

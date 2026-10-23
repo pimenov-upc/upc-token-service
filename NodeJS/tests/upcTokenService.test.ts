@@ -1,4 +1,3 @@
-import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   UpcTokenService,
@@ -6,165 +5,102 @@ import {
   type UpcTokenServiceOptions,
 } from '../src/core/upcTokenService.js';
 
-const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
-const privateKey = keyPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
-const publicKey = keyPair.publicKey.export({ format: 'pem', type: 'spki' }).toString();
 const merchantOptions: UpcTokenServiceOptions = {
   merchantId: '7651243',
   terminalId: 'E7651243',
-  privateKey,
 };
-
 const fetchMock = vi.fn<typeof fetch>();
+const xmlResponse = '<?xml version="1.0" encoding="UTF-8"?><ECommerceConnect><Message><XMLResponse><TranCode>000</TranCode></XMLResponse></Message></ECommerceConnect>';
 
-function jsonResponse(payload: Record<string, unknown>, status = 200): Response {
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return new Response(JSON.stringify({
-    header: 'eyJhbGciOiJSUzUxMiJ9',
-    payload: encodedPayload,
-    signature: 'unused-in-these-unit-tests',
-  }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function createService(
-  resource: string = 'test',
-  options: Partial<UpcTokenServiceOptions> = {}
-): UpcTokenService {
+function createService(resource = 'test', options: Partial<UpcTokenServiceOptions> = {}): UpcTokenService {
   return new UpcTokenService(resource, { ...merchantOptions, ...options });
 }
 
-function getRequest(): { url: string; init: RequestInit; envelope: SignedRequest } {
+function getRequest(): { url: string; init: RequestInit; body: string } {
   const call = fetchMock.mock.calls[0];
   if (call === undefined) {
     throw new Error('Expected fetch to be called.');
   }
 
   const [input, init = {}] = call;
-  return {
-    url: String(input),
-    init,
-    envelope: JSON.parse(String(init.body)) as SignedRequest,
-  };
+  return { url: String(input), init, body: String(init.body) };
 }
 
-interface SignedRequest {
-  header: string;
-  payload: string;
-  signature: string;
-}
-
-function decodeSignedPayload(envelope: SignedRequest): Record<string, unknown> {
-  return JSON.parse(Buffer.from(envelope.payload, 'base64url').toString('utf8')) as Record<
-    string,
-    unknown
-  >;
-}
-
-function verifySignedRequest(envelope: SignedRequest): boolean {
-  const header = JSON.parse(Buffer.from(envelope.header, 'base64url').toString('utf8')) as {
-    alg: string;
-  };
-  const verifier = createVerify('RSA-SHA256');
-  verifier.update(`${envelope.header}.${envelope.payload}`);
-  verifier.end();
-  return header.alg === 'RS256' && verifier.verify(publicKey, Buffer.from(envelope.signature, 'base64url'));
-}
-
-async function expectSignedPost(
-  operation: () => Promise<unknown>,
-  path: string,
-  expectedPayload: Record<string, unknown>,
+async function expectXmlPost(
+  operation: () => Promise<string>,
+  endpoint: string,
+  expectedOperationXml: string,
   resource: string = UpcTokenServiceResource.Test
 ): Promise<void> {
-  await operation();
+  await expect(operation()).resolves.toBe(xmlResponse);
 
-  const { url, init, envelope } = getRequest();
-  expect(url).toBe(`${resource}${path}`);
+  const { url, init, body } = getRequest();
+  expect(url).toBe(`${resource}${endpoint}`);
   expect(init.method).toBe('POST');
-  expect(new Headers(init.headers).get('Content-Type')).toBe('application/json');
-  expect(decodeSignedPayload(envelope)).toEqual(expectedPayload);
-  expect(verifySignedRequest(envelope)).toBe(true);
+  expect(new Headers(init.headers).get('Content-Type')).toBe('text/xml; charset=utf-8');
+  expect(body).toMatch(/^<\?xml version="1\.0" encoding="UTF-8"\?><ECommerceConnect /);
+  expect(body).toContain(expectedOperationXml);
+  expect(body).toContain('<Message id="');
+  expect(body).not.toContain('"header"');
+  expect(body).not.toContain('"payload"');
+  expect(body).not.toContain('"signature"');
 }
 
-describe('UpcTokenService', () => {
+describe('UpcTokenService XML API', () => {
   beforeEach(() => {
     fetchMock.mockReset();
-    fetchMock.mockResolvedValue(jsonResponse({ TranCode: '000', Comment: 'OK' }));
+    fetchMock.mockResolvedValue(new Response(xmlResponse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/xml; charset=utf-8' },
+    }));
     vi.stubGlobal('fetch', fetchMock);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  it('uses the test resource and signs a create-token request', async () => {
-    const service = createService('test');
+  it('sends an XML create-token request with card data', async () => {
+    const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.createToken({
         trackingId: 'create-1',
-        card: {
-          cardNum: '4111111111111111',
-          expMonth: '12',
-          expYear: '2030',
-          cvNum: '123',
-        },
+        card: { cardNum: '4111111111111111', expMonth: '12', expYear: '2030', cvNum: '123' },
       }),
       '/go/token/create',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        TrackingId: 'create-1',
-        card: {
-          CardNum: '4111111111111111',
-          expMonth: '12',
-          expYear: '2030',
-          CVNum: '123',
-        },
-      }
+      '<XMLCreateTokenRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>create-1</trackingId><Card><CardNum>4111111111111111</CardNum><ExpYear>2030</ExpYear><ExpMonth>12</ExpMonth><CVNum>123</CVNum></Card></XMLCreateTokenRequest>'
     );
   });
 
-  it('omits optional CVV when creating a token without one', async () => {
+  it('omits optional CVV from create-token XML when it is undefined', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.createToken({
         trackingId: 'create-2',
         card: { cardNum: '4111111111111111', expMonth: '12', expYear: '2030' },
       }),
       '/go/token/create',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        TrackingId: 'create-2',
-        card: { CardNum: '4111111111111111', expMonth: '12', expYear: '2030' },
-      }
+      '<XMLCreateTokenRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>create-2</trackingId><Card><CardNum>4111111111111111</CardNum><ExpYear>2030</ExpYear><ExpMonth>12</ExpMonth></Card></XMLCreateTokenRequest>'
     );
   });
 
-  it('refreshes a token with UPC request field casing', async () => {
+  it('sends refresh-token XML with nested UPC token ID', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.refreshToken({ trackingId: 'refresh-1', tokenId: 'token-1' }),
       '/go/token/refresh',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'refresh-1',
-        UPCToken: 'token-1',
-      }
+      '<XMLRefreshTokenRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>refresh-1</trackingId><UPCToken><tokenId>token-1</tokenId></UPCToken></XMLRefreshTokenRequest>'
     );
   });
 
-  it('deletes a token and includes optional reason fields', async () => {
+  it('sends delete-token XML with nested update request and reason', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.deleteToken({
         trackingId: 'delete-1',
         tokenId: 'token-1',
@@ -172,135 +108,91 @@ describe('UpcTokenService', () => {
         reason: 'Reported lost device',
       }),
       '/go/token/delete',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'delete-1',
-        UPCToken: 'token-1',
-        ReasonCode: 'SUSPECTED_FRAUD',
-        Reason: 'Reported lost device',
-      }
+      '<XMLDeleteTokenRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>delete-1</trackingId><UpdateTokenRequest><UPCToken><tokenId>token-1</tokenId></UPCToken><reasonCode>SUSPECTED_FRAUD</reasonCode><reason>Reported lost device</reason></UpdateTokenRequest></XMLDeleteTokenRequest>'
     );
   });
 
-  it('gets token status', async () => {
+  it('sends token-status XML with nested UPC token ID', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.getTokenStatus({ trackingId: 'status-1', tokenId: 'token-1' }),
       '/go/token/status',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'status-1',
-        UPCToken: 'token-1',
-      }
+      '<XMLTokenStatusRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>status-1</trackingId><UPCToken><tokenId>token-1</tokenId></UPCToken></XMLTokenStatusRequest>'
     );
   });
 
-  it('suspends a token', async () => {
+  it('sends suspend-token XML with nested update request and reason code', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.suspendToken({
         trackingId: 'suspend-1',
         tokenId: 'token-1',
         reasonCode: 'DEVICE_LOST',
       }),
       '/go/token/suspend',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'suspend-1',
-        UPCToken: 'token-1',
-        ReasonCode: 'DEVICE_LOST',
-      }
+      '<XMLSuspendTokenRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>suspend-1</trackingId><UpdateTokenRequest><UPCToken><tokenId>token-1</tokenId></UPCToken><reasonCode>DEVICE_LOST</reasonCode></UpdateTokenRequest></XMLSuspendTokenRequest>'
     );
   });
 
-  it('resumes a token', async () => {
+  it('sends resume-token XML with nested update request and reason', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.resumeToken({
         trackingId: 'resume-1',
         tokenId: 'token-1',
         reasonCode: 'DEVICE_FOUND',
+        reason: 'Device recovered',
       }),
       '/go/token/resume',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'resume-1',
-        UPCToken: 'token-1',
-        ReasonCode: 'DEVICE_FOUND',
-      }
+      '<XMLResumeTokenRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>resume-1</trackingId><UpdateTokenRequest><UPCToken><tokenId>token-1</tokenId></UPCToken><reasonCode>DEVICE_FOUND</reasonCode><reason>Device recovered</reason></UpdateTokenRequest></XMLResumeTokenRequest>'
     );
   });
 
-  it('gets card content and includes an optional brand when supplied', async () => {
+  it('sends card-content XML and optional Brand element', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.getCardContent({
         trackingId: 'content-1',
         contentId: 'content-1-id',
         brand: 'VISA',
       }),
       '/go/card/content',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'content-1',
-        contentId: 'content-1-id',
-        brand: 'VISA',
-      }
+      '<XMLGetCardContentRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>content-1</trackingId><contentId>content-1-id</contentId><Brand>VISA</Brand></XMLGetCardContentRequest>'
     );
   });
 
-  it('gets card metadata for a token', async () => {
+  it('sends card-metadata XML with nested UPC token ID', async () => {
     const service = createService();
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.getCardMetadata({ trackingId: 'metadata-1', tokenId: 'token-1' }),
       '/go/card/metadata',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'metadata-1',
-        UPCToken: 'token-1',
-      }
+      '<XMLGetCardMetadataRequest><MerchantID>7651243</MerchantID><TerminalID>E7651243</TerminalID><trackingId>metadata-1</trackingId><UPCToken><tokenId>token-1</tokenId></UPCToken></XMLGetCardMetadataRequest>'
     );
   });
 
-  it('uses the production endpoint for the production environment', async () => {
+  it('uses the production endpoint', async () => {
     const service = createService('production');
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.getTokenStatus({ trackingId: 'status-prod', tokenId: 'token-1' }),
       '/go/token/status',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'status-prod',
-        UPCToken: 'token-1',
-      },
+      '<XMLTokenStatusRequest>',
       UpcTokenServiceResource.Production
     );
   });
 
-  it('accepts a custom HTTPS resource and uses only its origin', async () => {
+  it('accepts a custom HTTPS resource and uses its origin', async () => {
     const service = createService('https://custom.upc.example/api/prefix');
 
-    await expectSignedPost(
+    await expectXmlPost(
       () => service.getTokenStatus({ trackingId: 'status-custom', tokenId: 'token-1' }),
       '/go/token/status',
-      {
-        MerchantID: '7651243',
-        TerminalID: 'E7651243',
-        trackingId: 'status-custom',
-        UPCToken: 'token-1',
-      },
+      '<XMLTokenStatusRequest>',
       'https://custom.upc.example'
     );
   });
@@ -349,7 +241,6 @@ describe('UpcTokenService', () => {
   it.each([
     ['merchant ID', { merchantId: '' }],
     ['terminal ID', { terminalId: '' }],
-    ['private key', { privateKey: '' }],
   ])('rejects an empty %s in client configuration', (_name, option) => {
     expect(() => createService('test', option)).toThrow();
   });
@@ -358,13 +249,73 @@ describe('UpcTokenService', () => {
     expect(() => createService(resource)).toThrow();
   });
 
-  it('returns the decoded response payload', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ TranCode: '000', TokenStatus: 'ACTIVE' }));
+  it('XML-escapes special characters in text fields', async () => {
+    const service = createService();
+
+    await service.getCardContent({
+      trackingId: 'tracking&<id>',
+      contentId: 'content"id',
+      brand: "VISA'&",
+    });
+
+    const { body } = getRequest();
+    expect(body).toContain('<trackingId>tracking&amp;&lt;id&gt;</trackingId>');
+    expect(body).toContain('<contentId>content&quot;id</contentId>');
+    expect(body).toContain('<Brand>VISA&apos;&amp;</Brand>');
+  });
+
+  it('returns the raw XML response without JSON decoding', async () => {
     const service = createService();
 
     await expect(
       service.getTokenStatus({ trackingId: 'status-1', tokenId: 'token-1' })
-    ).resolves.toEqual({ TranCode: '000', TokenStatus: 'ACTIVE' });
+    ).resolves.toBe(xmlResponse);
+  });
+
+  it('logs request and response details while redacting sensitive XML values', async () => {
+    const sensitiveResponse =
+      '<ECommerceConnect><tokenId>token-secret</tokenId><TAVV>tavv-secret</TAVV>' +
+      '<TokenNumber>number-secret</TokenNumber><encodedData>binary-secret</encodedData></ECommerceConnect>';
+    fetchMock.mockResolvedValue(new Response(sensitiveResponse, { status: 200 }));
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const service = createService();
+
+    await service.createToken({
+      trackingId: 'create-logged',
+      card: { cardNum: '4111111111111111', expMonth: '12', expYear: '2030', cvNum: '123' },
+    });
+
+    const logs = infoSpy.mock.calls.flat().join(' ');
+    expect(logs).toContain('POST https://ecg.test.upc.ua/go/token/create');
+    expect(logs).toContain('Request XML for XMLCreateTokenRequest');
+    expect(logs).toContain('<XMLCreateTokenRequest>');
+    expect(logs).toContain('HTTP 200 response for XMLCreateTokenRequest');
+    expect(logs).toContain('[REDACTED]');
+    expect(logs).toContain('[OMITTED]');
+    expect(logs).not.toContain('4111111111111111');
+    expect(logs).not.toContain('123');
+    expect(logs).not.toContain('token-secret');
+    expect(logs).not.toContain('tavv-secret');
+    expect(logs).not.toContain('number-secret');
+    expect(logs).not.toContain('binary-secret');
+    infoSpy.mockRestore();
+  });
+
+  it('marks an empty XML response in logs', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const service = createService();
+
+    await service.createToken({
+      trackingId: 'create-empty-response',
+      card: { cardNum: '4111111111111111', expMonth: '12', expYear: '2030' },
+    });
+
+    const logs = infoSpy.mock.calls.flat().join(' ');
+    expect(logs).toContain('Empty: true');
+    expect(logs).toContain('[empty response body]');
+    expect(logs).not.toContain('4111111111111111');
+    infoSpy.mockRestore();
   });
 
   it('surfaces non-success HTTP responses', async () => {
@@ -374,17 +325,5 @@ describe('UpcTokenService', () => {
     await expect(
       service.getTokenStatus({ trackingId: 'status-1', tokenId: 'token-1' })
     ).rejects.toMatchObject({ status: 502 });
-  });
-
-  it('rejects a response with an invalid base64url JSON payload', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ payload: 'not-json' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }));
-    const service = createService();
-
-    await expect(
-      service.getTokenStatus({ trackingId: 'status-1', tokenId: 'token-1' })
-    ).rejects.toThrow('Could not decode UPC Token Service response payload.');
   });
 });
