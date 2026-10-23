@@ -27,7 +27,7 @@ SDK підтримує наступні методи UPC Token Service:
 - [x] Dart: [Dart-клієнт](Dart/readme.md).
 - [x] NodeJS: [TypeScript-клієнт](NodeJS/readme.md).
 - [ ] Python: [Python-клієнт](Python/readme.md).
-- [ ] Go: [Go-клієнт](Go/readme.md).
+- [x] Go: [Go-клієнт](Go/readme.md).
 - [ ] PHP: [PHP-клієнт](PHP/readme.md).
 - [ ] Kotlin/Java: [Java-клієнт](Kotlin/readme.md).
 - [ ] Swift: [Swift-клієнт](Swift/readme.md).
