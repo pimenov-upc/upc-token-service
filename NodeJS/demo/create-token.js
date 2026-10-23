@@ -34,13 +34,14 @@ function redactSensitiveXml(xml) {
 
 /** Creates a UPC token using card details loaded from demo/.env. */
 async function main() {
+  const customBaseUrl = process.env.UPC_BASE_URL?.trim();
   const environment = (process.env.UPC_ENVIRONMENT ?? 'test').toLowerCase();
-  if (environment !== 'test' && environment !== 'production') {
+  if (!customBaseUrl && environment !== 'test' && environment !== 'production') {
     throw new Error('UPC_ENVIRONMENT must be either "test" or "production".');
   }
 
   const cvNum = process.env.UPC_CARD_CVV?.trim();
-  const client = new UpcTokenService(environment, {
+  const client = new UpcTokenService(customBaseUrl || environment, {
     merchantId: requiredEnv('UPC_MERCHANT_ID'),
     terminalId: requiredEnv('UPC_TERMINAL_ID'),
   });

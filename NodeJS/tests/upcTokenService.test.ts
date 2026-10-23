@@ -37,7 +37,7 @@ async function expectXmlPost(
   const { url, init, body } = getRequest();
   expect(url).toBe(`${resource}${endpoint}`);
   expect(init.method).toBe('POST');
-  expect(new Headers(init.headers).get('Content-Type')).toBe('text/xml; charset=utf-8');
+  expect(new Headers(init.headers).get('Content-Type')).toBe('application/xml; charset=utf-8');
   expect(body).toMatch(/^<\?xml version="1\.0" encoding="UTF-8"\?><ECommerceConnect /);
   expect(body).toContain(expectedOperationXml);
   expect(body).toContain('<Message id="');
@@ -186,15 +186,20 @@ describe('UpcTokenService XML API', () => {
     );
   });
 
-  it('accepts a custom HTTPS resource and uses its origin', async () => {
-    const service = createService('https://custom.upc.example/api/prefix');
+  it('appends the API path to a custom HTTPS base URL', async () => {
+    const service = createService('https://certsrv1.ad.upc.intranet:8443');
 
     await expectXmlPost(
       () => service.getTokenStatus({ trackingId: 'status-custom', tokenId: 'token-1' }),
       '/go/token/status',
       '<XMLTokenStatusRequest>',
-      'https://custom.upc.example'
+      'https://certsrv1.ad.upc.intranet:8443'
     );
+  });
+
+  it('rejects a custom resource URL that already contains an API path', () => {
+    expect(() => createService('https://certsrv1.ad.upc.intranet:8443/go/token/create'))
+      .toThrow('Custom UPC resource must be a base HTTPS URL without a path');
   });
 
   it.each(['', '   '])('rejects an empty tracking ID (%j)', async (trackingId) => {

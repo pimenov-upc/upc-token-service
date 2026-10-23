@@ -134,6 +134,11 @@ const API_PATHS = {
  *   merchantId: '7651243',
  *   terminalId: 'E7651243',
  * });
+ * // Provide the custom server base URL; API paths are appended by the SDK.
+ * const customClient = new UpcTokenService(
+ *   'https://certsrv1.ad.upc.intranet:8443',
+ *   { merchantId: '7651243', terminalId: 'E7651243' }
+ * );
  */
 export class UpcTokenService {
 	private readonly http: Http;
@@ -290,7 +295,7 @@ export class UpcTokenService {
 		try {
 			const response = await this.http.post(endpoint, xml, {
 				options: {
-					headers: { 'Content-Type': 'text/xml; charset=utf-8' },
+					headers: { 'Content-Type': 'application/xml; charset=utf-8' },
 				},
 				returnType: 'text',
 				...(this.timeout !== undefined ? { timeout: this.timeout } : {}),
@@ -351,6 +356,12 @@ export class UpcTokenService {
 		if (parsedUrl.protocol !== 'https:') {
 			throw new TypeError('UPC Token Service resource must use HTTPS.');
 		}
+		if (parsedUrl.pathname !== '/' || parsedUrl.search || parsedUrl.hash) {
+			throw new TypeError(
+				'Custom UPC resource must be a base HTTPS URL without a path, query, or fragment; API paths are appended automatically.'
+			);
+		}
+
 		return parsedUrl.origin;
 	}
 
