@@ -1,16 +1,26 @@
-export {
-	UpcTokenService,
-	UpcTokenServiceResource,
-} from './core/upcTokenService.js';
+export { UpcTokenService } from './core/upcTokenService.js';
+export { UpcTokenServiceResource } from './core/constants.js';
 export type {
 	CardContentRequest,
 	CardDetails,
 	CardMetadataRequest,
 	CreateTokenRequest,
-	TokenReasonCode,
+	HttpRequest,
+	JsonObject,
 	TokenRequest,
 	UpdateTokenRequest,
-	UpcTokenServiceEnvironment,
 	UpcTokenServiceOptions,
+	XmlNode,
+	XmlObject,
+} from './core/interfaces.js';
+export type {
+	HttpMethod,
+	HttpReturnType,
+	JsonValue,
+	TokenReasonCode,
+	UpcTokenServiceEnvironment,
+	UpcTokenServiceResource as UpcTokenServiceResourceType,
 	UpcTokenServiceResponse,
-} from './core/upcTokenService.js';
+	UpcTokenServiceReturnType,
+	XmlValue,
+} from './core/types.js';

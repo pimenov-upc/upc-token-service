@@ -1,3 +1,6 @@
+import type { HttpMethod, HttpReturnType } from '../core/types.js';
+import type { HttpRequest } from '../core/interfaces.js';
+
 const HTTP_TIMEOUT_MS = 60000;
 
 export class FetchError extends Error {
@@ -121,19 +124,6 @@ export const options = createHttpMethod('OPTIONS');
 export const head = createHttpMethod('HEAD');
 export const connect = createHttpMethod('CONNECT');
 export const trace = createHttpMethod('TRACE');
-
-type HttpReturnType =
-  'text' | 'json' | 'blob' | 'arrayBuffer' | 'formData' | 'bytes' | 'raw' | 'auto';
-
-type HttpMethod =
-  'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD' | 'CONNECT' | 'TRACE';
-
-interface HttpRequest {
-  body?: unknown;
-  options?: RequestInit;
-  timeout?: number;
-  returnType?: HttpReturnType;
-}
 
 class Http {
   private lastResponse: Response | null = null;

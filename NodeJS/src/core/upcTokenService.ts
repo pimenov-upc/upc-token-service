@@ -1,133 +1,27 @@
 import Http, { FetchError } from '../utils/http.js';
+import { xml2json } from '../utils/xml2json.js';
+import { createXmlRequest, redactXmlForLog } from '../utils/xml.js';
+import { API_PATHS, UpcTokenServiceResource } from './constants.js';
+import type {
+	CardContentRequest,
+	CardMetadataRequest,
+	CreateTokenRequest,
+	XmlObject,
+	TokenRequest,
+	UpdateTokenRequest,
+	UpcTokenServiceOptions,
+} from './interfaces.js';
+import type {
+	TokenReasonCode,
+	UpcTokenServiceEnvironment,
+	UpcTokenServiceResource as UpcTokenServiceResourceType,
+	UpcTokenServiceResponse,
+	UpcTokenServiceReturnType,
+} from './types.js';
 
-export const UpcTokenServiceResource = {
-	Test: 'https://ecg.test.upc.ua',
-	Production: 'https://secure.upc.ua',
-} as const;
-
-export type UpcTokenServiceEnvironment = 'test' | 'production';
-export type UpcTokenServiceResource =
-	| UpcTokenServiceEnvironment
-	| (string & {});
-
-export interface UpcTokenServiceOptions {
-	merchantId: string;
-	terminalId: string;
-	timeout?: number;
-	/** Enables redacted request/response diagnostics. Defaults to false. */
-	logging?: boolean;
-}
-
-export interface TokenRequest {
-	trackingId: string;
-	tokenId: string;
-}
-
-export interface CardDetails {
-	cardNum: string;
-	expMonth: string;
-	expYear: string;
-	cvNum?: string;
-}
-
-export interface CreateTokenRequest {
-	trackingId: string;
-	card: CardDetails;
-}
-
-export type TokenReasonCode =
-	| 'DEVICE_LOST'
-	| 'DEVICE_STOLEN'
-	| 'SUSPECTED_FRAUD'
-	| 'ACCOUNT_CLOSED'
-	| 'NOT_FRAUD'
-	| 'DEVICE_FOUND'
-	| 'OTHER';
-
-export interface UpdateTokenRequest extends TokenRequest {
-	reasonCode?: TokenReasonCode;
-	reason?: string;
-}
-
-export interface CardContentRequest {
-	trackingId: string;
-	contentId: string;
-	brand?: string;
-}
-
-export interface CardMetadataRequest {
-	trackingId: string;
-	tokenId: string;
-}
-
-export type UpcTokenServiceResponse = string;
-
-type XmlValue = string | number | boolean | null | undefined | XmlObject;
-interface XmlObject {
-	[key: string]: XmlValue;
-}
+export { UpcTokenServiceResource };
 
 let messageId = 0;
-
-const XML_HEADER = '<?xml version="1.0" encoding="UTF-8"?>';
-const XML_ROOT_OPEN =
-	'<ECommerceConnect xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ' +
-	'xmlns:noNamespaceSchemaLocation="https://secure.upc.ua/go/pub/schema/xmlpay-1.18.xsd" ' +
-	'xmlns:xenc="http://www.w3.org/2001/04/xmlenc#" ' +
-	'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
-	'xsi:noNamespaceSchemaLocation="https://secure.upc.ua/go/pub/schema/xmlpay-1.18.xsd">';
-
-const escapeXml = (value: string): string =>
-	value
-		.replaceAll('&', '&amp;')
-		.replaceAll('<', '&lt;')
-		.replaceAll('>', '&gt;')
-		.replaceAll('"', '&quot;')
-		.replaceAll("'", '&apos;');
-
-const serializeXmlElement = (name: string, value: XmlValue): string => {
-	if (value === null || value === undefined) {
-		return '';
-	}
-
-	if (typeof value === 'object') {
-		const children = Object.entries(value)
-			.map(([childName, childValue]) => serializeXmlElement(childName, childValue))
-			.join('');
-		return `<${name}>${children}</${name}>`;
-	}
-
-	return `<${name}>${escapeXml(String(value))}</${name}>`;
-};
-
-const redactXmlForLog = (xml: string): string => {
-	const sensitiveTags = ['CardNum', 'CVNum', 'TokenNumber', 'TAVV', 'tokenId'];
-	const redactedXml = sensitiveTags.reduce((result, tag) => {
-		return result.replace(
-			new RegExp(`(<${tag}\\b[^>]*>)[\\s\\S]*?(</${tag}>)`, 'gi'),
-			'$1[REDACTED]$2'
-		);
-	}, xml).replace(
-		/<encodedData\b[^>]*>[\s\S]*?<\/encodedData>/gi,
-		'<encodedData>[OMITTED]</encodedData>'
-	);
-
-	const maxLogLength = 2000;
-	return redactedXml.length > maxLogLength
-		? `${redactedXml.slice(0, maxLogLength)}…[truncated]`
-		: redactedXml;
-};
-
-const API_PATHS = {
-	createToken: '/go/token/create',
-	refreshToken: '/go/token/refresh',
-	deleteToken: '/go/token/delete',
-	getTokenStatus: '/go/token/status',
-	suspendToken: '/go/token/suspend',
-	resumeToken: '/go/token/resume',
-	getCardContent: '/go/card/content',
-	getCardMetadata: '/go/card/metadata',
-} as const;
 
 /**
  * UPC Token Service SDK client.
@@ -147,12 +41,13 @@ export class UpcTokenService {
 	private readonly http: Http;
 	private readonly timeout: number | undefined;
 	private readonly loggingEnabled: boolean;
+	private readonly returnType: UpcTokenServiceReturnType;
 
 	/**
 	 * Creates an SDK client for the UPC test, production, or custom HTTPS resource.
 	 */
 	constructor(
-		resource: UpcTokenServiceResource,
+		resource: UpcTokenServiceResourceType,
 		private readonly options: UpcTokenServiceOptions
 	) {
 		const baseUrl = this.resolveBaseUrl(resource);
@@ -163,6 +58,7 @@ export class UpcTokenService {
 
 		this.timeout = options.timeout;
 		this.loggingEnabled = options.logging ?? false;
+		this.returnType = options.returnType ?? 'raw';
 		this.http = new Http(baseUrl, options.timeout);
 	}
 
@@ -182,27 +78,36 @@ export class UpcTokenService {
 			card.CVNum = request.card.cvNum;
 		}
 
-		return this.send(API_PATHS.createToken, 'XMLCreateTokenRequest', {
+		const result = await this.send(API_PATHS.createToken, 'XMLCreateTokenRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			Card: card,
 		});
+		
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	/** Refreshes an existing token and obtains fresh payment token data. */
 	async refreshToken(request: TokenRequest): Promise<UpcTokenServiceResponse> {
 		this.validateTokenRequest(request);
-		return this.send(API_PATHS.refreshToken, 'XMLRefreshTokenRequest', {
+		const result = await this.send(API_PATHS.refreshToken, 'XMLRefreshTokenRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			UPCToken: { tokenId: request.tokenId },
 		});
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	/** Permanently deletes a token. Deleted tokens cannot be resumed. */
 	async deleteToken(request: UpdateTokenRequest): Promise<UpcTokenServiceResponse> {
 		this.validateTokenRequest(request);
-		return this.send(API_PATHS.deleteToken, 'XMLDeleteTokenRequest', {
+		const result = await this.send(API_PATHS.deleteToken, 'XMLDeleteTokenRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			UpdateTokenRequest: {
@@ -210,22 +115,30 @@ export class UpcTokenService {
 				...this.reasonPayload(request),
 			},
 		});
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	/** Retrieves the current state of a token. */
 	async getTokenStatus(request: TokenRequest): Promise<UpcTokenServiceResponse> {
 		this.validateTokenRequest(request);
-		return this.send(API_PATHS.getTokenStatus, 'XMLTokenStatusRequest', {
+		const result = await this.send(API_PATHS.getTokenStatus, 'XMLTokenStatusRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			UPCToken: { tokenId: request.tokenId },
 		});
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	/** Suspends a token, allowing it to be resumed later. */
 	async suspendToken(request: UpdateTokenRequest): Promise<UpcTokenServiceResponse> {
 		this.validateTokenRequest(request);
-		return this.send(API_PATHS.suspendToken, 'XMLSuspendTokenRequest', {
+		const result = await this.send(API_PATHS.suspendToken, 'XMLSuspendTokenRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			UpdateTokenRequest: {
@@ -233,12 +146,16 @@ export class UpcTokenService {
 				...this.reasonPayload(request),
 			},
 		});
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	/** Resumes a previously suspended token. */
 	async resumeToken(request: UpdateTokenRequest): Promise<UpcTokenServiceResponse> {
 		this.validateTokenRequest(request);
-		return this.send(API_PATHS.resumeToken, 'XMLResumeTokenRequest', {
+		const result = await this.send(API_PATHS.resumeToken, 'XMLResumeTokenRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			UpdateTokenRequest: {
@@ -246,6 +163,10 @@ export class UpcTokenService {
 				...this.reasonPayload(request),
 			},
 		});
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	/** Retrieves card content by its content ID. */
@@ -253,22 +174,30 @@ export class UpcTokenService {
 		this.validateTrackingId(request.trackingId);
 		this.validateNonEmpty(request.contentId, 'contentId');
 
-		return this.send(API_PATHS.getCardContent, 'XMLGetCardContentRequest', {
+		const result = await this.send(API_PATHS.getCardContent, 'XMLGetCardContentRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			contentId: request.contentId,
 			...(request.brand !== undefined ? { Brand: request.brand } : {}),
 		});
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	/** Retrieves card metadata for a token. */
 	async getCardMetadata(request: CardMetadataRequest): Promise<UpcTokenServiceResponse> {
 		this.validateTokenRequest(request);
-		return this.send(API_PATHS.getCardMetadata, 'XMLGetCardMetadataRequest', {
+		const result = await this.send(API_PATHS.getCardMetadata, 'XMLGetCardMetadataRequest', {
 			...this.merchantPayload(),
 			trackingId: request.trackingId,
 			UPCToken: { tokenId: request.tokenId },
 		});
+		if (this.returnType === 'json') {
+			return xml2json(result);
+		}
+		return result;
 	}
 
 	private merchantPayload(): { MerchantID: string; TerminalID: string } {
@@ -291,8 +220,9 @@ export class UpcTokenService {
 		endpoint: string,
 		operation: string,
 		payload: XmlObject
-	): Promise<UpcTokenServiceResponse> {
-		const xml = this.createXmlRequest(operation, payload);
+	): Promise<string> {
+		messageId += 1;
+		const xml = createXmlRequest(operation, messageId, payload);
 		const url = `${this.http.base}${endpoint}`;
 		if (this.loggingEnabled) {
 			console.info(`[UPC Token Service] POST ${url} (${operation})`);
@@ -340,17 +270,7 @@ export class UpcTokenService {
 		}
 	}
 
-	private createXmlRequest(operation: string, payload: XmlObject): string {
-		messageId += 1;
-		const requestBody = Object.entries(payload)
-			.map(([name, value]) => serializeXmlElement(name, value))
-			.join('');
-
-		return `${XML_HEADER}${XML_ROOT_OPEN}<Message id="${messageId}" version="1.0">` +
-			`<${operation}>${requestBody}</${operation}></Message></ECommerceConnect>`;
-	}
-
-	private resolveBaseUrl(resource: UpcTokenServiceResource): string {
+	private resolveBaseUrl(resource: UpcTokenServiceResourceType): string {
 		const resourceUrl =
 			resource === 'test' ? UpcTokenServiceResource.Test
 			: resource === 'production' ? UpcTokenServiceResource.Production

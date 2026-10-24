@@ -1,6 +1,6 @@
 # `UpcTokenService`: посібник для розробника-початківця
 
-Цей модуль надає TypeScript-клієнт для роботи з UPC Token Service. Він перевіряє вхідні дані, формує XML-запити, надсилає їх до UPC і повертає тіло відповіді як рядок. Вихідний код розташований у [upcTokenService.ts](../src/core/upcTokenService.ts).
+Цей модуль надає TypeScript-клієнт для роботи з UPC Token Service. Він перевіряє вхідні дані, формує XML-запити, надсилає їх до UPC і повертає відповідь у форматі, який задає параметр `returnType`: XML-рядок або JSON-сумісний об’єкт. Для розбору XML не потрібні додаткові залежності чи браузерний `DOMParser`.
 
 ## Для чого потрібен модуль
 
@@ -10,9 +10,9 @@
 - створює XML у форматі, який очікує сервіс UPC;
 - надсилає POST-запит до відповідної кінцевої точки;
 - перевіряє частину обов’язкових вхідних значень;
-- повертає XML-відповідь без її перетворення на об’єкт.
+- повертає XML-рядок або перетворює XML-відповідь на JSON-сумісний об’єкт.
 
-HTTP-логіку, тайм-аут і обробку невдалих HTTP-статусів реалізує [http.ts](../src/utils/http.ts).
+HTTP-логіку, тайм-аут і обробку невдалих HTTP-статусів реалізує [http.ts](../src/utils/http.ts). XML-запити формуються у [xml.ts](../src/utils/xml.ts), середовища та шляхи API оголошені у [constants.ts](../src/core/constants.ts), а типи й інтерфейси винесені у [types.ts](../src/core/types.ts) та [interfaces.ts](../src/core/interfaces.ts).
 
 ## Передумови
 
@@ -30,12 +30,12 @@ const upc = new UpcTokenService('test', {
   terminalId: 'E7651243',
 });
 
-const xml = await upc.getTokenStatus({
+const responseXml = await upc.getTokenStatus({
   trackingId: 'status-1',
   tokenId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
 });
 
-console.info(xml);
+console.info(responseXml);
 ```
 
 У реальному застосунку не зберігайте ідентифікатори або платіжні дані у відкритому коді. Отримуйте їх із захищеної конфігурації застосунку.
@@ -49,12 +49,54 @@ console.info(xml);
 | `terminalId` | `string` | Так | Ідентифікатор термінала. Не може бути порожнім і має бути не довшим за 35 символів. |
 | `timeout` | `number` | Ні | Тайм-аут HTTP-запиту в мілісекундах. Якщо не задано, HTTP-клієнт використовує 60 000 мс. |
 | `logging` | `boolean` | Ні | Вмикає діагностичні повідомлення. За замовчуванням `false`. |
+| `returnType` | `'json'`, `'raw'` або `'string'` | Ні | `'raw'` (за замовчуванням) і `'string'` повертають XML-рядок; `'json'` повертає розібраний об’єкт. |
 
 Власна адреса має використовувати HTTPS і бути лише базовою адресою, наприклад `https://gateway.example:8443`. Не додавайте до неї шлях API, параметри запиту або фрагмент: SDK додає шлях самостійно.
 
+## Експортовані типи та інтерфейси
+
+Наведені типи доступні з головного модуля пакета ([index.ts](../src/index.ts)) і можуть використовуватися для типізації параметрів клієнта та результатів.
+
+### Запити й налаштування
+
+| Тип | Опис |
+| --- | --- |
+| `UpcTokenServiceOptions` | Налаштування клієнта: `merchantId`, `terminalId`, необов’язкові `timeout`, `logging` і `returnType`. |
+| `UpcTokenServiceEnvironment` | Назва вбудованого середовища: `'test'` або `'production'`. |
+| `UpcTokenServiceResourceType` | Значення для параметра `resource`: `'test'`, `'production'` або власна адреса-рядок. У `index.ts` тип експортується під цією назвою, щоб не конфліктувати з константою `UpcTokenServiceResource`. |
+| `TokenRequest` | Спільні поля запиту токена: `trackingId` і `tokenId`. |
+| `CardDetails` | Дані картки: `cardNum`, `expMonth`, `expYear`; `cvNum` необов’язковий. |
+| `CreateTokenRequest` | Запит створення токена: `trackingId` і вкладений об’єкт `card` типу `CardDetails`. |
+| `UpdateTokenRequest` | `TokenRequest` із необов’язковими `reasonCode` та `reason`; використовується для оновлення стану або видалення токена. |
+| `CardContentRequest` | Запит вмісту картки: `trackingId`, `contentId` і необов’язковий `brand`. |
+| `CardMetadataRequest` | Запит метаданих картки: `trackingId` і `tokenId`. |
+| `TokenReasonCode` | Допустимі коди причини: `DEVICE_LOST`, `DEVICE_STOLEN`, `SUSPECTED_FRAUD`, `ACCOUNT_CLOSED`, `NOT_FRAUD`, `DEVICE_FOUND`, `OTHER`. |
+
+### Формат відповіді та XML/JSON
+
+| Тип | Опис |
+| --- | --- |
+| `UpcTokenServiceReturnType` | Режим відповіді: `'json'`, `'raw'` або `'string'`. `'json'` розбирає XML в об’єкт; `'raw'` і `'string'` повертають XML-рядок. |
+| `UpcTokenServiceResponse` | Результат методу SDK: XML-рядок або `JsonObject`, залежно від `returnType`. |
+| `JsonObject` | Об’єкт із рядковими ключами та значеннями типу `JsonValue`. |
+| `JsonValue` | Рекурсивне JSON-сумісне значення: рядок, об’єкт `JsonObject` або масив таких значень. |
+| `XmlObject` | Об’єктне представлення XML-елементів: ключі — назви елементів, значення — `XmlValue`. |
+| `XmlValue` | Значення XML-поля: рядок, вкладений `XmlObject` або масив XML-значень. |
+| `XmlNode` | Внутрішня структура вузла парсера XML із назвою `name`, об’єктом `value` та текстом `text`. Зазвичай не потрібна для виклику API. |
+
+### Типи HTTP-утиліти
+
+Ці типи також експортуються з `index.ts`, хоча переважно призначені для типізації внутрішньої HTTP-утиліти SDK.
+
+| Тип | Опис |
+| --- | --- |
+| `HttpMethod` | HTTP-методи, які підтримує утиліта: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, `HEAD`, `CONNECT`, `TRACE`. |
+| `HttpReturnType` | Спосіб читання HTTP-відповіді: `text`, `json`, `blob`, `arrayBuffer`, `formData`, `bytes`, `raw` або `auto`. |
+| `HttpRequest` | Параметри HTTP-запиту: необов’язкові `body`, `options` (`RequestInit`), `timeout` і `returnType`. |
+
 ## Методи API
 
-Усі методи асинхронні та повертають `Promise<string>` із XML-відповіддю UPC.
+Усі методи асинхронні та повертають `Promise<UpcTokenServiceResponse>`. Фактичне значення — XML-рядок для `'raw'`/`'string'` або об’єкт для `'json'`.
 
 | Метод | Призначення | Шлях API |
 | --- | --- | --- |
@@ -268,7 +310,7 @@ const responseXml = await upc.getCardMetadata({
 
 ### Приклад XML-відповіді
 
-Методи повертають XML-відповідь як рядок і не розбирають її автоматично. У базовому тестовому сценарії SDK отримує таку відповідь-заглушку:
+За замовчуванням (`returnType: 'raw'`) методи повертають XML-відповідь як рядок. У базовому тестовому сценарії SDK отримує таку відповідь-заглушку:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -282,6 +324,35 @@ const responseXml = await upc.getCardMetadata({
 ```
 
 Це лише тестова заглушка, а не гарантований приклад повної відповіді UPC для кожної операції. Реальний XML залежить від методу й результату обробки на стороні UPC; перевіряйте його згідно з документацією сервісу. За HTTP-помилки, наприклад статусу `502`, Promise відхиляється з помилкою, а XML-відповідь не повертається.
+
+Щоб отримати JSON-сумісний об’єкт, задайте `returnType: 'json'` у параметрах клієнта. Наприклад, наведена вище відповідь перетвориться на:
+
+```json
+{
+  "Message": {
+    "XMLResponse": {
+      "TranCode": "000"
+    }
+  }
+}
+```
+
+Кореневий елемент XML у результат не включається; текстові значення стають рядками, а повторювані дочірні елементи — масивами. Застосунок має самостійно перевірити код і результат платіжної операції у відповіді UPC.
+
+Режим задається під час створення клієнта:
+
+```ts
+const jsonClient = new UpcTokenService('test', {
+  merchantId: '7651243',
+  terminalId: 'E7651243',
+  returnType: 'json',
+});
+
+const response = await jsonClient.getTokenStatus({
+  trackingId: 'status-1',
+  tokenId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+});
+```
 
 ### Формат `tokenId`
 
@@ -308,7 +379,7 @@ SDK також відхиляє порожній рядок і значення,
 
 Клієнт створює XML-документ із кореневим елементом `ECommerceConnect` і повідомленням `Message`. Назва XML-операції залежить від методу, наприклад `XMLCreateTokenRequest` або `XMLTokenStatusRequest`. Дані вкладених об’єктів перетворюються на вкладені XML-елементи, а текстові значення екрануються для XML.
 
-Запит надсилається методом HTTP POST із заголовком `Content-Type: application/xml`. Відповідь повертається як звичайний рядок. Цей модуль **не розбирає XML-відповідь** і не вирішує, чи успішна саме платіжна операція: застосунок має перевірити вміст відповіді UPC.
+Запит надсилається методом HTTP POST із заголовком `Content-Type: application/xml`. Відповідь за замовчуванням повертається як рядок; із `returnType: 'json'` XML розбирається у звичайний об’єкт без зовнішніх пакетів і браузерних API. SDK не вирішує, чи успішна саме платіжна операція: застосунок має перевірити вміст відповіді UPC.
 
 ## Перевірка даних і помилки
 
@@ -318,11 +389,11 @@ SDK також відхиляє порожній рядок і значення,
 
 ```ts
 try {
-  const responseXml = await upc.getTokenStatus({
+  const response = await upc.getTokenStatus({
     trackingId: 'status-2',
     tokenId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
   });
-  // За потреби розберіть і перевірте XML-відповідь UPC.
+  // Перевірте код і результат операції у відповіді UPC.
 } catch (error) {
   console.error('Не вдалося отримати стан токена.', error);
 }

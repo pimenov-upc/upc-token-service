@@ -69,6 +69,31 @@ function redactSensitiveXml(xml) {
   );
 }
 
+/** Formats parsed responses while redacting sensitive JSON fields. */
+function formatResponse(response) {
+  if (typeof response === 'string') {
+    return redactSensitiveXml(response);
+  }
+
+  const sensitiveFields = new Set([
+    'cardnum', 'cardnumber', 'cvnum', 'tokenid', 'tokennumber', 'tavv',
+  ]);
+  const redact = (value) => {
+    if (Array.isArray(value)) return value.map(redact);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+        key,
+        key.toLowerCase() === 'encodeddata'
+          ? '[OMITTED]'
+          : sensitiveFields.has(key.toLowerCase()) ? '[REDACTED]' : redact(child),
+      ]));
+    }
+    return value;
+  };
+
+  return JSON.stringify(redact(response), null, 2);
+}
+
 /** Prints safe usage text. */
 function printUsage() {
   console.info(
@@ -90,6 +115,7 @@ function createClient() {
   return new UpcTokenService(customBaseUrl || environment, {
     merchantId: requiredEnv('UPC_MERCHANT_ID'),
     terminalId: requiredEnv('UPC_TERMINAL_ID'),
+    returnType: optionalEnv('UPC_RESULT_TYPE'),
     logging: isLoggingEnabled(),
   });
 }
@@ -179,8 +205,8 @@ async function main() {
       break;
   }
 
-  console.info(`${operation} XML response:`,
-    response ? redactSensitiveXml(response) : '[empty response body]');
+  console.info(`${operation} response:`,
+    response ? formatResponse(response) : '[empty response body]');
 }
 
 main().catch((error) => {
